@@ -1,0 +1,15 @@
+module(
+    name = "rules_flux_deploy",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_oci", version = "2.3.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
+
+bazel_lib_toolchains = use_extension("@aspect_bazel_lib//lib:extensions.bzl", "toolchains")
+bazel_lib_toolchains.jq()
+use_repo(bazel_lib_toolchains, "jq_toolchains")
+register_toolchains("@jq_toolchains//:all")
+
+flux_deploy_deps = use_extension("//flux_deploy:extensions.bzl", "flux_deploy_dependencies")
+use_repo(flux_deploy_deps, "rules_flux_deploy_tools")

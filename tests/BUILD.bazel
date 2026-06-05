@@ -1,0 +1,101 @@
+load("//flux_deploy:defs.bzl", "flux_push", "image_kustomization", "image_ref", "publish_bundle_set", "push_bundle")
+load(":runfiles_push.bzl", "fake_push_with_runfile")
+
+filegroup(
+    name = "deploy_srcs",
+    srcs = glob(["deploy/app/**"]),
+)
+
+image_ref(
+    name = "app_image",
+    yaml_ref = "example.com/acme/app",
+    repository_suffix = "app",
+    image = ":app",
+    push = ":fake_image_push",
+)
+
+image_kustomization(
+    name = "app_deploy",
+    artifact_suffix = "app-deploy",
+    srcs = [":deploy_srcs"],
+    images = [":app_image"],
+    source_prefix = "tests/deploy/app",
+    stamp = False,
+)
+
+image_kustomization(
+    name = "migration_deploy",
+    artifact_suffix = "migration-deploy",
+    bundle_name = "migration",
+    srcs = [":deploy_srcs"],
+    source_prefix = "tests/deploy/app",
+    overlay_path = "base",
+    force = True,
+    stamp = False,
+)
+
+flux_push(
+    name = "app_deploy_push",
+    artifact = "oci://example.com/acme/app-deploy",
+    bundle = ":app_deploy",
+    flux_tool = ":fake_flux",
+)
+
+flux_push(
+    name = "raw_app_deploy_push",
+    srcs = [":deploy_srcs"],
+    artifact = "oci://example.com/acme/raw-app-deploy",
+    flux_tool = ":fake_flux",
+    source_prefix = "tests/deploy/app",
+)
+
+fake_push_with_runfile(
+    name = "fake_image_push",
+    data = ":fake_image_push_marker.txt",
+)
+
+genrule(
+    name = "fake_flux",
+    srcs = [":fake_flux.sh"],
+    outs = ["fake_flux_tool"],
+    cmd = "cp $(location :fake_flux.sh) $@ && chmod +x $@",
+    executable = True,
+)
+
+push_bundle(
+    name = "publish_app",
+    bundles = [":app_deploy"],
+    flux_tool = ":fake_flux",
+    push_prefix = "example.com/acme",
+    tag = "test",
+)
+
+publish_bundle_set(
+    name = "publish",
+    bundles = [
+        ":app_deploy",
+        ":migration_deploy",
+    ],
+    flux_tool = ":fake_flux",
+    push_prefix = "example.com/acme",
+    tag = "test",
+)
+
+publish_bundle_set(
+    name = "publish_multi",
+    bundles = [":app_deploy"],
+    flux_tool = ":fake_flux",
+    push_prefix = "example.com/acme",
+    push_tags = [
+        "git-sha",
+        "latest",
+    ],
+    compare_tag = "latest",
+    skip_existing = True,
+)
+
+push_bundle(
+    name = "publish_real_flux_bundle",
+    bundles = [":migration_deploy"],
+    push_images = False,
+)
