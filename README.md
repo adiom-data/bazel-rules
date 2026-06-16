@@ -170,12 +170,14 @@ image_kustomization(
     srcs = [":migration_deploy_srcs"],
     source_prefix = "deploy/migration",
     overlay_path = "base",
+    bundle_pull_secret = "ghcr-pull",
     force = True,
 )
 ```
 
 `bundle_name` defaults to the target name, `overlay_path` defaults to `.`, and
-`force` defaults to `False`.
+`bundle_pull_secret` is omitted from publish manifests unless set. `force`
+defaults to `False`.
 
 Stamped placeholders come from Bazel stable status, usually configured with:
 
@@ -369,6 +371,7 @@ publish_bundle_set(
         ":nats_deploy",
     ],
     push_prefix = "ghcr.io/adiom-data",
+    bundle_pull_secret = "ghcr-pull",
     push_tags = ["{STABLE_GIT_COMMIT}", "latest"],
     compare_tag = "latest",
     skip_existing = True,
@@ -398,6 +401,7 @@ orchestration metadata:
       "name": "app_deploy",
       "oci_bundle": "oci://ghcr.io/adiom-data/app-deploy:latest",
       "overlay_path": ".",
+      "bundle_pull_secret": "ghcr-pull",
       "force": false
     },
     {
