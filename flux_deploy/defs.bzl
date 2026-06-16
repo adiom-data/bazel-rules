@@ -532,6 +532,36 @@ def _push_bundle_impl(ctx):
         "  grep -Eiq '(MANIFEST_UNKNOWN|NAME_UNKNOWN|TAG_UNKNOWN|not[ -]?found|404)' \"$1\"",
         "}",
         "",
+        "is_transient_image_tag_error() {",
+        "  grep -Eiq '(MANIFEST_UNKNOWN|manifest unknown|fetching .+@sha256:)' \"$1\"",
+        "}",
+        "",
+        "run_image_push_with_retries() {",
+        "  local attempt max delay status log",
+        "  attempt=1",
+        "  max=3",
+        "  delay=1",
+        "  while true; do",
+        "    log=$(mktemp)",
+        "    if \"$@\" >\"${log}\" 2>&1; then",
+        "      cat \"${log}\"",
+        "      rm -f \"${log}\"",
+        "      return 0",
+        "    fi",
+        "    status=$?",
+        "    cat \"${log}\" >&2",
+        "    if [[ \"${attempt}\" -ge \"${max}\" ]] || ! is_transient_image_tag_error \"${log}\"; then",
+        "      rm -f \"${log}\"",
+        "      return \"${status}\"",
+        "    fi",
+        "    echo \"image push failed while tagging a just-pushed digest; retrying in ${delay}s (${attempt}/${max})\" >&2",
+        "    rm -f \"${log}\"",
+        "    sleep \"${delay}\"",
+        "    attempt=$((attempt + 1))",
+        "    delay=$((delay * 2))",
+        "  done",
+        "}",
+        "",
         "remote_digest() {",
         "  local ref=\"$1\"",
         "  local err status",
@@ -711,7 +741,7 @@ def _push_bundle_impl(ctx):
             commands.append("  image_push_args=(--repository \"${image_repository}\")")
             commands.append("  for tag in \"${effective_tags[@]}\"; do image_push_args+=(--tag \"${tag}\"); done")
             commands.append("  if [[ \"${insecure}\" == true ]]; then image_push_args+=(--insecure); fi")
-            commands.append("  \"${image_push_tool}\" \"${image_push_args[@]}\"")
+            commands.append("  run_image_push_with_retries \"${image_push_tool}\" \"${image_push_args[@]}\"")
             commands.append("  fi")
         commands.append("fi")
         commands.append("")

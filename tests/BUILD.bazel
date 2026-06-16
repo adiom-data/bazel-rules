@@ -14,11 +14,28 @@ image_ref(
     push = ":fake_image_push",
 )
 
+image_ref(
+    name = "app_image_flaky_push",
+    yaml_ref = "example.com/acme/app",
+    repository_suffix = "app",
+    image = ":app",
+    push = ":fake_image_push_flaky",
+)
+
 image_kustomization(
     name = "app_deploy",
     artifact_suffix = "app-deploy",
     srcs = [":deploy_srcs"],
     images = [":app_image"],
+    source_prefix = "tests/deploy/app",
+    stamp = False,
+)
+
+image_kustomization(
+    name = "app_deploy_flaky_push",
+    artifact_suffix = "app-deploy",
+    srcs = [":deploy_srcs"],
+    images = [":app_image_flaky_push"],
     source_prefix = "tests/deploy/app",
     stamp = False,
 )
@@ -54,6 +71,12 @@ fake_push_with_runfile(
     data = ":fake_image_push_marker.txt",
 )
 
+fake_push_with_runfile(
+    name = "fake_image_push_flaky",
+    data = ":fake_image_push_marker.txt",
+    fail_once_with_manifest_unknown = True,
+)
+
 genrule(
     name = "fake_flux",
     srcs = [":fake_flux.sh"],
@@ -65,6 +88,14 @@ genrule(
 push_bundle(
     name = "publish_app",
     bundles = [":app_deploy"],
+    flux_tool = ":fake_flux",
+    push_prefix = "example.com/acme",
+    tag = "test",
+)
+
+push_bundle(
+    name = "publish_app_flaky_image_push",
+    bundles = [":app_deploy_flaky_push"],
     flux_tool = ":fake_flux",
     push_prefix = "example.com/acme",
     tag = "test",

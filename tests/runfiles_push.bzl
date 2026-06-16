@@ -19,6 +19,14 @@ def _fake_push_with_runfile_impl(ctx):
         "  echo \"missing nested push runfile: ${data_path}\" >&2",
         "  exit 1",
         "fi",
+        "if [[ %s == true ]]; then" % ("true" if ctx.attr.fail_once_with_manifest_unknown else "false"),
+        "  state=\"${TMPDIR:-/tmp}/rules_flux_deploy_fake_push_${PPID}_%s\"" % ctx.label.name,
+        "  if [[ ! -e \"${state}\" ]]; then",
+        "    touch \"${state}\"",
+        "    echo 'Error: fetching \"example.com/acme/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\": MANIFEST_UNKNOWN: manifest unknown' >&2",
+        "    exit 1",
+        "  fi",
+        "fi",
         "echo \"fake image push $* $(cat \"${found}\")\"",
     ]
     ctx.actions.write(script, "\n".join(commands), is_executable = True)
@@ -35,5 +43,6 @@ fake_push_with_runfile = rule(
             allow_single_file = True,
             mandatory = True,
         ),
+        "fail_once_with_manifest_unknown": attr.bool(),
     },
 )
