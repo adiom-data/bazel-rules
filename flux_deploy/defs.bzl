@@ -23,6 +23,7 @@ DeployBundleInfo = provider(
         "bundle_name": "Human-readable/logical bundle name used in publish manifests.",
         "overlay_path": "Path inside the Flux OCI artifact to reconcile.",
         "bundle_pull_secret": "Optional pull secret name used by deploy orchestration for the Flux OCI bundle.",
+        "namespace_id": "Optional namespace identifier used by deploy orchestration.",
         "force": "Whether deploy orchestration should force this bundle, e.g. for migrations.",
         "images": "ImageRefInfo values referenced by this bundle.",
     },
@@ -285,6 +286,7 @@ def _image_kustomization_impl(ctx):
             bundle_name = ctx.attr.bundle_name or ctx.label.name,
             overlay_path = ctx.attr.overlay_path,
             bundle_pull_secret = ctx.attr.bundle_pull_secret,
+            namespace_id = ctx.attr.namespace_id,
             force = ctx.attr.force,
             images = image_infos,
         ),
@@ -317,6 +319,9 @@ image_kustomization = rule(
         ),
         "bundle_pull_secret": attr.string(
             doc = "Optional pull secret name emitted in publish manifests for this Flux OCI bundle.",
+        ),
+        "namespace_id": attr.string(
+            doc = "Optional namespace identifier emitted in publish manifests for this bundle.",
         ),
         "force": attr.bool(
             default = False,
@@ -821,6 +826,12 @@ push_bundle = rule(
         "bundle_pull_secret": attr.string(
             doc = "Accepted for publish_bundle_set parity; publish manifests use this to override all bundle pull secrets.",
         ),
+        "namespace_id": attr.string(
+            doc = "Accepted for publish_bundle_set parity; publish manifests use this to override all bundle namespace identifiers.",
+        ),
+        "manifest_tag": attr.string(
+            doc = "Accepted for publish_bundle_set parity; publish manifests use this as the explicit manifest reference tag.",
+        ),
         "tag": attr.string(
             doc = "Single image and Flux artifact tag. Use either tag or tags.",
         ),
@@ -875,31 +886,30 @@ push_bundle = rule(
 )
 
 def _publish_manifest_impl(ctx):
-    configured_tags = _effective_tags(ctx)
-    manifest_tag = ctx.attr.compare_tag if ctx.attr.skip_existing else configured_tags[0]
     out = ctx.actions.declare_file(ctx.attr.name + ".json")
     inputs = []
     commands = [
         "set -euo pipefail",
         "push_prefix=%s" % _sh_quote(ctx.attr.push_prefix),
         "artifact_prefix=%s" % _sh_quote(ctx.attr.artifact_prefix),
-        "tag=%s" % _sh_quote(manifest_tag),
+        "manifest_tag=%s" % _sh_quote(ctx.attr.manifest_tag),
         "bundle_pull_secret_override=%s" % _sh_quote(ctx.attr.bundle_pull_secret),
+        "namespace_id_override=%s" % _sh_quote(ctx.attr.namespace_id),
         "",
     ]
     if ctx.attr.stamp:
         inputs.append(ctx.info_file)
         commands.append(_expand_status_placeholders_shell("push_prefix", ctx.info_file.path))
         commands.append(_expand_status_placeholders_shell("artifact_prefix", ctx.info_file.path))
-        commands.append(_expand_status_placeholders_shell("tag", ctx.info_file.path))
+        commands.append(_expand_status_placeholders_shell("manifest_tag", ctx.info_file.path))
         commands.append(_expand_status_placeholders_shell("bundle_pull_secret_override", ctx.info_file.path))
+        commands.append(_expand_status_placeholders_shell("namespace_id_override", ctx.info_file.path))
 
     commands.extend([
         "push_prefix=\"${push_prefix%/}\"",
         "artifact_prefix=\"${artifact_prefix%/}\"",
         "if [[ -z \"${artifact_prefix}\" ]]; then artifact_prefix=\"${push_prefix}\"; fi",
         "if [[ -z \"${artifact_prefix}\" ]]; then echo \"artifact_prefix or push_prefix is required for %s\" >&2; exit 2; fi" % ctx.label,
-        "if [[ -z \"${tag}\" ]]; then echo \"tag is required for %s\" >&2; exit 2; fi" % ctx.label,
         "",
         "json_quote() {",
         "  local s=\"$1\"",
@@ -933,10 +943,14 @@ def _publish_manifest_impl(ctx):
             "  overlay_path=%s" % _sh_quote(bundle.overlay_path),
             "  bundle_pull_secret=%s" % _sh_quote(bundle.bundle_pull_secret),
             "  if [[ -n \"${bundle_pull_secret_override}\" ]]; then bundle_pull_secret=\"${bundle_pull_secret_override}\"; fi",
-            "  oci_bundle=\"oci://${artifact_prefix}/${artifact_suffix}:${tag}\"",
+            "  namespace_id=%s" % _sh_quote(bundle.namespace_id),
+            "  if [[ -n \"${namespace_id_override}\" ]]; then namespace_id=\"${namespace_id_override}\"; fi",
+            "  oci_bundle=\"oci://${artifact_prefix}/${artifact_suffix}\"",
+            "  if [[ -n \"${manifest_tag}\" ]]; then oci_bundle=\"${oci_bundle}:${manifest_tag}\"; fi",
         ])
         if ctx.attr.stamp:
             commands.append(_expand_status_placeholders_shell("bundle_pull_secret", ctx.info_file.path))
+            commands.append(_expand_status_placeholders_shell("namespace_id", ctx.info_file.path))
         commands.extend([
             "  printf '    {\"name\": '",
             "  json_quote \"${bundle_name}\"",
@@ -944,6 +958,10 @@ def _publish_manifest_impl(ctx):
             "  json_quote \"${oci_bundle}\"",
             "  printf ', \"overlay_path\": '",
             "  json_quote \"${overlay_path}\"",
+            "  if [[ -n \"${namespace_id}\" ]]; then",
+            "    printf ', \"namespace_id\": '",
+            "    json_quote \"${namespace_id}\"",
+            "  fi",
             "  if [[ -n \"${bundle_pull_secret}\" ]]; then",
             "    printf ', \"bundle_pull_secret\": '",
             "    json_quote \"${bundle_pull_secret}\"",
@@ -985,23 +1003,15 @@ publish_manifest = rule(
         "bundle_pull_secret": attr.string(
             doc = "Optional pull secret name overriding all bundle pull secrets in the manifest.",
         ),
-        "tag": attr.string(
-            doc = "Single Flux artifact tag for manifest references. Use either tag or tags.",
+        "namespace_id": attr.string(
+            doc = "Optional namespace identifier overriding all bundle namespace identifiers in the manifest.",
         ),
-        "push_tags": attr.string_list(
-            doc = "Flux artifact tags. Use either tag or push_tags. Defaults to [\"latest\"] when neither is set.",
-        ),
-        "compare_tag": attr.string(
-            default = "latest",
-            doc = "Tag emitted in manifests when skip_existing is enabled.",
-        ),
-        "skip_existing": attr.bool(
-            default = False,
-            doc = "Whether manifest references should use compare_tag.",
+        "manifest_tag": attr.string(
+            doc = "Optional explicit tag to include in manifest OCI bundle references. If omitted, references are untagged.",
         ),
         "stamp": attr.bool(
             default = False,
-            doc = "Whether to expand {KEY} placeholders in push_prefix, artifact_prefix, bundle_pull_secret, and tag from Bazel stable status.",
+            doc = "Whether to expand {KEY} placeholders in push_prefix, artifact_prefix, manifest_tag, bundle_pull_secret, and namespace_id from Bazel stable status.",
         ),
     },
     doc = "Generates a JSON manifest describing Flux deploy bundles for orchestration.",
@@ -1030,10 +1040,8 @@ def publish_bundle_set(name, bundles, all_name = None, visibility = None, **kwar
             push_prefix = kwargs.get("push_prefix", ""),
             artifact_prefix = kwargs.get("artifact_prefix", ""),
             bundle_pull_secret = kwargs.get("bundle_pull_secret", ""),
-            tag = kwargs.get("tag", ""),
-            push_tags = kwargs.get("push_tags", []),
-            compare_tag = kwargs.get("compare_tag", "latest"),
-            skip_existing = kwargs.get("skip_existing", False),
+            namespace_id = kwargs.get("namespace_id", ""),
+            manifest_tag = kwargs.get("manifest_tag", ""),
             stamp = kwargs.get("stamp", False),
         )
         push_bundle(
@@ -1049,10 +1057,8 @@ def publish_bundle_set(name, bundles, all_name = None, visibility = None, **kwar
         push_prefix = kwargs.get("push_prefix", ""),
         artifact_prefix = kwargs.get("artifact_prefix", ""),
         bundle_pull_secret = kwargs.get("bundle_pull_secret", ""),
-        tag = kwargs.get("tag", ""),
-        push_tags = kwargs.get("push_tags", []),
-        compare_tag = kwargs.get("compare_tag", "latest"),
-        skip_existing = kwargs.get("skip_existing", False),
+        namespace_id = kwargs.get("namespace_id", ""),
+        manifest_tag = kwargs.get("manifest_tag", ""),
         stamp = kwargs.get("stamp", False),
     )
     push_bundle(

@@ -26,6 +26,7 @@ image_kustomization(
     name = "app_deploy",
     artifact_suffix = "app-deploy",
     bundle_pull_secret = "bundle-pull-secret",
+    namespace_id = "bundle-namespace",
     srcs = [":deploy_srcs"],
     images = [":app_image"],
     source_prefix = "tests/deploy/app",
@@ -110,7 +111,9 @@ publish_bundle_set(
     ],
     flux_tool = ":fake_flux",
     bundle_pull_secret = "set-pull-secret",
+    namespace_id = "set-namespace",
     push_prefix = "example.com/acme",
+    manifest_tag = "manifest-test",
     tag = "test",
 )
 
