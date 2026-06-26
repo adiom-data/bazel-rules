@@ -176,7 +176,7 @@ image_kustomization(
 )
 ```
 
-`bundle_name` defaults to the target name, `overlay_path` defaults to `.`, and
+`bundle_name` defaults to the target name, `overlay_path` defaults to `./`, and
 `bundle_pull_secret` and `namespace_id` are omitted from publish manifests unless
 set. `force` defaults to `False`.
 
@@ -403,7 +403,7 @@ orchestration metadata. Bundle refs are untagged unless `manifest_tag` is set:
     {
       "name": "app_deploy",
       "oci_bundle": "oci://ghcr.io/adiom-data/app-deploy:deploy-ref",
-      "overlay_path": ".",
+      "overlay_path": "./",
       "namespace_id": "prod",
       "bundle_pull_secret": "ghcr-pull",
       "force": false

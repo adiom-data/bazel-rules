@@ -344,7 +344,7 @@ image_kustomization = rule(
             doc = "Logical bundle name emitted in publish manifests. Defaults to the target name.",
         ),
         "overlay_path": attr.string(
-            default = ".",
+            default = "./",
             doc = "Path inside the Flux OCI artifact to reconcile.",
         ),
         "bundle_pull_secret": attr.string(
