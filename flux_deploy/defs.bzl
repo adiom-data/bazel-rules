@@ -157,6 +157,36 @@ fi
 def _shell_array_assignment(name, values):
     return "%s=(%s)" % (name, " ".join([_sh_quote(value) for value in values]))
 
+def _write_executable_script(ctx, out, commands, mnemonic):
+    content = "\n".join(commands)
+    if not ctx.attr.stamp:
+        ctx.actions.write(out, content, is_executable = True)
+        return
+
+    template = ctx.actions.declare_file(ctx.attr.name + ".sh.template")
+    ctx.actions.write(template, content)
+    ctx.actions.run_shell(
+        outputs = [out],
+        inputs = [template, ctx.info_file],
+        command = "\n".join([
+            "set -euo pipefail",
+            "template=%s" % _sh_quote(template.path),
+            "status=%s" % _sh_quote(ctx.info_file.path),
+            "out=%s" % _sh_quote(out.path),
+            "content=$(cat \"${template}\")",
+            "if [[ -s \"${status}\" ]]; then",
+            "  while IFS=' ' read -r key value; do",
+            "    [[ -n \"${key}\" ]] || continue",
+            "    content=\"${content//\\{${key}\\}/${value}}\"",
+            "  done < \"${status}\"",
+            "fi",
+            "printf '%s' \"${content}\" > \"${out}\"",
+            "chmod +x \"${out}\"",
+        ]),
+        mnemonic = mnemonic,
+        progress_message = "Writing stamped executable %{label}",
+    )
+
 def _effective_tags(ctx):
     if ctx.attr.tag and ctx.attr.push_tags:
         fail("%s: specify only one of tag or push_tags" % ctx.label)
@@ -378,12 +408,6 @@ def _flux_push_impl(ctx):
     ]
     commands.append(_runfiles_helpers())
 
-    if ctx.attr.stamp:
-        commands.append(_expand_status_placeholders_shell("artifact", ctx.info_file.path))
-        commands.append(_expand_status_placeholders_shell("tag", ctx.info_file.path))
-        commands.append(_expand_status_placeholders_shell("source", ctx.info_file.path))
-        commands.append(_expand_status_placeholders_shell("revision", ctx.info_file.path))
-
     if ctx.file.bundle:
         runfiles.append(ctx.file.bundle)
         commands.append("path=$(rlocation %s)" % _sh_quote(ctx.file.bundle.short_path))
@@ -428,7 +452,7 @@ def _flux_push_impl(ctx):
         "",
     ])
 
-    ctx.actions.write(script, "\n".join(commands), is_executable = True)
+    _write_executable_script(ctx, script, commands, "FluxPushScript")
     all_runfiles = ctx.runfiles(files = runfiles)
     all_runfiles = all_runfiles.merge(ctx.attr.flux_tool[DefaultInfo].default_runfiles)
     if ctx.attr.bundle:
@@ -525,13 +549,6 @@ def _push_bundle_impl(ctx):
         "",
     ]
 
-    if ctx.attr.stamp:
-        commands.append(_expand_status_placeholders_shell("push_prefix", ctx.info_file.path))
-        commands.append(_expand_status_placeholders_shell("artifact_prefix", ctx.info_file.path))
-        commands.append(_expand_status_array_placeholders_shell("configured_tags", ctx.info_file.path))
-        commands.append(_expand_status_placeholders_shell("compare_tag", ctx.info_file.path))
-        commands.append(_expand_status_placeholders_shell("source", ctx.info_file.path))
-        commands.append(_expand_status_placeholders_shell("revision", ctx.info_file.path))
     commands.append(_runfiles_helpers())
     commands.extend([
         "",
@@ -794,7 +811,7 @@ def _push_bundle_impl(ctx):
             "",
         ])
 
-    ctx.actions.write(script, "\n".join(commands), is_executable = True)
+    _write_executable_script(ctx, script, commands, "PushBundleScript")
     all_runfiles = ctx.runfiles(files = runfiles)
     all_runfiles = all_runfiles.merge(ctx.attr.flux_tool[DefaultInfo].default_runfiles)
     all_runfiles = all_runfiles.merge(crane.default.default_runfiles)

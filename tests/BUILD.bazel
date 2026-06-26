@@ -96,6 +96,44 @@ push_bundle(
 )
 
 push_bundle(
+    name = "publish_app_stamped_artifact_prefix",
+    bundles = [":app_deploy"],
+    artifact_prefix = "{STABLE_ARTIFACT_PREFIX}",
+    flux_tool = ":fake_flux",
+    push_prefix = "{STABLE_PUSH_PREFIX}",
+    stamp = True,
+    tag = "test",
+    tags = ["manual"],
+)
+
+genrule(
+    name = "stamped_artifact_prefix_test",
+    outs = ["stamped_artifact_prefix_test.out"],
+    cmd = """
+set -euo pipefail
+output="$$($(location :publish_app_stamped_artifact_prefix) --skip-images --push-prefix runtime.example/acme)"
+case "$${output}" in
+  *"push artifact oci://stamped-artifacts.example/acme/app-deploy:test"*) ;;
+  *)
+    echo "expected stamped artifact prefix in fake flux output" >&2
+    echo "$${output}" >&2
+    exit 1
+    ;;
+esac
+case "$${output}" in
+  *"{STABLE_ARTIFACT_PREFIX}"*|*"oci://runtime.example/acme/app-deploy:test"*)
+    echo "artifact prefix was not resolved from the explicit stamped value" >&2
+    echo "$${output}" >&2
+    exit 1
+    ;;
+esac
+printf '%s\\n' "$${output}" > "$@"
+""",
+    tags = ["manual"],
+    tools = [":publish_app_stamped_artifact_prefix"],
+)
+
+push_bundle(
     name = "publish_app_flaky_image_push",
     bundles = [":app_deploy_flaky_push"],
     flux_tool = ":fake_flux",
