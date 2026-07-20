@@ -50,6 +50,7 @@ image_kustomization(
     source_prefix = "tests/deploy/app",
     overlay_path = "base",
     force = True,
+    wait = True,
     stamp = False,
 )
 
@@ -153,6 +154,33 @@ publish_bundle_set(
     push_prefix = "example.com/acme",
     manifest_tag = "manifest-test",
     tag = "test",
+)
+
+genrule(
+    name = "publish_manifest_wait_test",
+    srcs = [":publish_manifest"],
+    outs = ["publish_manifest_wait_test.out"],
+    cmd = """
+set -euo pipefail
+manifest="$$(cat $(location :publish_manifest))"
+case "$${manifest}" in
+  *'"name": "app_deploy"'*'"force": false, "wait": false'*) ;;
+  *)
+    echo "expected app_deploy to default wait to false" >&2
+    echo "$${manifest}" >&2
+    exit 1
+    ;;
+esac
+case "$${manifest}" in
+  *'"name": "migration"'*'"force": true, "wait": true'*) ;;
+  *)
+    echo "expected migration to set wait to true" >&2
+    echo "$${manifest}" >&2
+    exit 1
+    ;;
+esac
+printf '%s\\n' "$${manifest}" > "$@"
+""",
 )
 
 publish_bundle_set(

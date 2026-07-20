@@ -25,6 +25,7 @@ DeployBundleInfo = provider(
         "bundle_pull_secret": "Optional pull secret name used by deploy orchestration for the Flux OCI bundle.",
         "namespace_id": "Optional namespace identifier used by deploy orchestration.",
         "force": "Whether deploy orchestration should force this bundle, e.g. for migrations.",
+        "wait": "Whether deploy orchestration should wait for this bundle to become ready.",
         "images": "ImageRefInfo values referenced by this bundle.",
     },
 )
@@ -318,6 +319,7 @@ def _image_kustomization_impl(ctx):
             bundle_pull_secret = ctx.attr.bundle_pull_secret,
             namespace_id = ctx.attr.namespace_id,
             force = ctx.attr.force,
+            wait = ctx.attr.wait,
             images = image_infos,
         ),
     ]
@@ -356,6 +358,10 @@ image_kustomization = rule(
         "force": attr.bool(
             default = False,
             doc = "Whether deploy orchestration should force this bundle, e.g. for migrations.",
+        ),
+        "wait": attr.bool(
+            default = False,
+            doc = "Whether deploy orchestration should wait for this bundle to become ready.",
         ),
         "repository_prefix_override_all": attr.string(
             doc = "Optional bundle-wide repository prefix override, e.g. ghcr.io/acme or {STABLE_REFERENCE_PREFIX}. If omitted, each original YAML image repo is preserved.",
@@ -984,6 +990,7 @@ def _publish_manifest_impl(ctx):
             "    json_quote \"${bundle_pull_secret}\"",
             "  fi",
             "  printf ', \"force\": %s' " % ("true" if bundle.force else "false"),
+            "  printf ', \"wait\": %s' " % ("true" if bundle.wait else "false"),
             "  printf '}%s\\n'" % comma,
         ])
 

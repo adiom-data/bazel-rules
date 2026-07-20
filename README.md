@@ -173,12 +173,13 @@ image_kustomization(
     bundle_pull_secret = "ghcr-pull",
     namespace_id = "prod",
     force = True,
+    wait = True,
 )
 ```
 
 `bundle_name` defaults to the target name, `overlay_path` defaults to `./`, and
 `bundle_pull_secret` and `namespace_id` are omitted from publish manifests unless
-set. `force` defaults to `False`.
+set. `force` and `wait` default to `False`.
 
 Stamped placeholders come from Bazel stable status, usually configured with:
 
@@ -406,13 +407,15 @@ orchestration metadata. Bundle refs are untagged unless `manifest_tag` is set:
       "overlay_path": "./",
       "namespace_id": "prod",
       "bundle_pull_secret": "ghcr-pull",
-      "force": false
+      "force": false,
+      "wait": false
     },
     {
       "name": "migration",
       "oci_bundle": "oci://ghcr.io/adiom-data/migration-deploy:deploy-ref",
       "overlay_path": "base",
-      "force": true
+      "force": true,
+      "wait": true
     }
   ]
 }
