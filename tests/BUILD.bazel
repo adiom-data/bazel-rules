@@ -1,5 +1,5 @@
 load("//flux_deploy:defs.bzl", "flux_push", "image_kustomization", "image_ref", "publish_bundle_set", "push_bundle")
-load(":runfiles_push.bzl", "fake_push_with_runfile")
+load(":runfiles_push.bzl", "fake_frontend_publish", "fake_push_with_runfile")
 
 filegroup(
     name = "deploy_srcs",
@@ -142,18 +142,86 @@ push_bundle(
     tag = "test",
 )
 
+fake_frontend_publish(
+    name = "publish_frontend=assets",
+)
+
 publish_bundle_set(
     name = "publish",
     bundles = [
         ":app_deploy",
         ":migration_deploy",
     ],
+    before_publish = {
+        "//tests:app_deploy": [
+            ":publish_frontend=assets",
+            ":fake_image_push",
+        ],
+    },
     flux_tool = ":fake_flux",
     bundle_pull_secret = "set-pull-secret",
     namespace_id = "set-namespace",
     push_prefix = "example.com/acme",
     manifest_tag = "manifest-test",
+    stamp = True,
     tag = "test",
+)
+
+genrule(
+    name = "publish_hooks_test",
+    outs = ["publish_hooks_test.out"],
+    cmd = """
+set -euo pipefail
+unset TEST_HOOK_CHANNEL
+export TEST_HOOK_DESTINATION=caller
+app_expected='frontend-assets preview {BUILD_USER} assets default
+fake image push nested-runfiles-ok
+push artifact oci://example.com/acme/app-deploy:first
+push artifact oci://example.com/acme/app-deploy:second'
+all_expected="$${app_expected}"'
+push artifact oci://example.com/acme/migration-deploy:first
+push artifact oci://example.com/acme/migration-deploy:second'
+check_order() {
+  local output
+  output="$$("$$1" --skip-images --tag first --tag second)"
+  output="$$(printf '%s\\n' "$${output}" | awk '{$$1=$$1; if ($$1 == "push") NF=3; print}')"
+  if [[ "$${output}" != "$$2" ]]; then
+    printf 'unexpected publish output:\\n%s\\n' "$${output}" >&2
+    exit 1
+  fi
+}
+check_order "$(location :publish_app_deploy)" "$${app_expected}"
+check_order "$(location :publish_all)" "$${all_expected}"
+
+status=0
+output="$$(TEST_HOOK_CHANNEL=caller TEST_HOOK_EXIT=7 "$(location :publish_all)" --skip-images 2>&1)" || status=$$?
+if [[ "$${status}" != 7 || "$${output}" != *"before_publish hook"* ||
+      "$${output}" != *"frontend-assets preview {BUILD_USER} assets caller"* ||
+      "$${output}" == *"fake image push"* || "$${output}" == *"push artifact"* ]]; then
+  printf 'unexpected failed publish output (exit %s):\\n%s\\n' "$${status}" "$${output}" >&2
+  exit 1
+fi
+
+status=0
+output="$$(TEST_IMAGE_PUSH_FAIL=1 "$(location :publish_all)" 2>&1)" || status=$$?
+if [[ "$${status}" != 19 || "$${output}" != 'fake image push rejected' ]]; then
+  printf 'unexpected output after image push failure (exit %s):\\n%s\\n' "$${status}" "$${output}" >&2
+  exit 1
+fi
+touch "$@"
+""",
+    tools = [
+        ":publish_all",
+        ":publish_app_deploy",
+    ],
+)
+
+genrule(
+    name = "publish_registry_test",
+    srcs = ["publish_registry_test.sh"],
+    outs = ["publish_registry_test.out"],
+    cmd = "bash $(location publish_registry_test.sh) $(location :publish_app_deploy) && touch $@",
+    tools = [":publish_app_deploy"],
 )
 
 genrule(

@@ -158,32 +158,39 @@ fi
 def _shell_array_assignment(name, values):
     return "%s=(%s)" % (name, " ".join([_sh_quote(value) for value in values]))
 
-def _write_executable_script(ctx, out, commands, mnemonic):
-    content = "\n".join(commands)
+def _write_executable_script(ctx, out, commands, mnemonic, unstamped_commands = []):
     if not ctx.attr.stamp:
-        ctx.actions.write(out, content, is_executable = True)
+        ctx.actions.write(out, "\n".join(commands + unstamped_commands), is_executable = True)
         return
 
     template = ctx.actions.declare_file(ctx.attr.name + ".sh.template")
-    ctx.actions.write(template, content)
+    ctx.actions.write(template, "\n".join(commands))
+    inputs = [template, ctx.info_file]
+    stamp_commands = [
+        "set -euo pipefail",
+        "template=%s" % _sh_quote(template.path),
+        "status=%s" % _sh_quote(ctx.info_file.path),
+        "out=%s" % _sh_quote(out.path),
+        "content=$(cat \"${template}\")",
+        "if [[ -s \"${status}\" ]]; then",
+        "  while IFS=' ' read -r key value; do",
+        "    [[ -n \"${key}\" ]] || continue",
+        "    content=\"${content//\\{${key}\\}/${value}}\"",
+        "  done < \"${status}\"",
+        "fi",
+        "printf '%s' \"${content}\" > \"${out}\"",
+    ]
+    if unstamped_commands:
+        body = ctx.actions.declare_file(ctx.attr.name + ".sh.body")
+        ctx.actions.write(body, "\n".join(unstamped_commands))
+        inputs.append(body)
+        stamp_commands.append("printf '\\n\\n' >> \"${out}\"")
+        stamp_commands.append("cat %s >> \"${out}\"" % _sh_quote(body.path))
+    stamp_commands.append("chmod +x \"${out}\"")
     ctx.actions.run_shell(
         outputs = [out],
-        inputs = [template, ctx.info_file],
-        command = "\n".join([
-            "set -euo pipefail",
-            "template=%s" % _sh_quote(template.path),
-            "status=%s" % _sh_quote(ctx.info_file.path),
-            "out=%s" % _sh_quote(out.path),
-            "content=$(cat \"${template}\")",
-            "if [[ -s \"${status}\" ]]; then",
-            "  while IFS=' ' read -r key value; do",
-            "    [[ -n \"${key}\" ]] || continue",
-            "    content=\"${content//\\{${key}\\}/${value}}\"",
-            "  done < \"${status}\"",
-            "fi",
-            "printf '%s' \"${content}\" > \"${out}\"",
-            "chmod +x \"${out}\"",
-        ]),
+        inputs = inputs,
+        command = "\n".join(stamp_commands),
         mnemonic = mnemonic,
         progress_message = "Writing stamped executable %{label}",
     )
@@ -537,7 +544,7 @@ def _push_bundle_impl(ctx):
     runfiles.append(ctx.executable.flux_tool)
     runfiles.append(crane.crane_info.binary)
     runfiles.append(jq.jqinfo.bin)
-    commands = [
+    script_header = [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         "",
@@ -555,14 +562,19 @@ def _push_bundle_impl(ctx):
         "",
     ]
 
-    commands.append(_runfiles_helpers())
+    commands = [_runfiles_helpers()]
     commands.extend([
         "",
         "crane_tool=$(rlocation %s)" % _sh_quote(crane.crane_info.binary.short_path),
         "jq_tool=$(rlocation %s)" % _sh_quote(jq.jqinfo.bin.short_path),
         "",
-        "is_missing_ref_error() {",
-        "  grep -Eiq '(MANIFEST_UNKNOWN|NAME_UNKNOWN|TAG_UNKNOWN|not[ -]?found|404)' \"$1\"",
+        "is_missing_manifest_error() {",
+        "  local diagnostic request missing",
+        "  # Crane can log a failed HEAD before retrying with GET. Use its final error.",
+        "  diagnostic=$(grep -m 1 '^Error: ' \"$1\") || return 1",
+        "  request='^Error: (fetching manifest [^[:space:]]+: )?(GET|HEAD) https?://[^/[:space:]]+/v2/[^[:space:]?#]+/manifests/[^/[:space:]?#]+: '",
+        "  missing='((MANIFEST_UNKNOWN|NAME_UNKNOWN|TAG_UNKNOWN)(:|$)|unexpected status code 404([[:space:]:]|$))'",
+        "  [[ \"${diagnostic}\" =~ ${request}${missing} ]]",
         "}",
         "",
         "is_transient_image_tag_error() {",
@@ -580,8 +592,9 @@ def _push_bundle_impl(ctx):
         "      cat \"${log}\"",
         "      rm -f \"${log}\"",
         "      return 0",
+        "    else",
+        "      status=$?",
         "    fi",
-        "    status=$?",
         "    cat \"${log}\" >&2",
         "    if [[ \"${attempt}\" -ge \"${max}\" ]] || ! is_transient_image_tag_error \"${log}\"; then",
         "      rm -f \"${log}\"",
@@ -604,17 +617,19 @@ def _push_bundle_impl(ctx):
         "      rm -f \"${err}\"",
         "      printf '%s\\n' \"${digest}\"",
         "      return 0",
+        "    else",
+        "      status=$?",
         "    fi",
-        "    status=$?",
         "  else",
         "    if digest=$(\"${crane_tool}\" digest \"${ref}\" 2>\"${err}\"); then",
         "      rm -f \"${err}\"",
         "      printf '%s\\n' \"${digest}\"",
         "      return 0",
+        "    else",
+        "      status=$?",
         "    fi",
-        "    status=$?",
         "  fi",
-        "  if is_missing_ref_error \"${err}\"; then",
+        "  if is_missing_manifest_error \"${err}\"; then",
         "    rm -f \"${err}\"",
         "    printf '\\n'",
         "    return 0",
@@ -638,8 +653,9 @@ def _push_bundle_impl(ctx):
         "      fi",
         "      printf '%s\\n' \"${layer_digest}\"",
         "      return 0",
+        "    else",
+        "      status=$?",
         "    fi",
-        "    status=$?",
         "  else",
         "    if manifest=$(\"${crane_tool}\" manifest \"${ref}\" 2>\"${err}\"); then",
         "      rm -f \"${err}\"",
@@ -650,10 +666,11 @@ def _push_bundle_impl(ctx):
         "      fi",
         "      printf '%s\\n' \"${layer_digest}\"",
         "      return 0",
+        "    else",
+        "      status=$?",
         "    fi",
-        "    status=$?",
         "  fi",
-        "  if is_missing_ref_error \"${err}\"; then",
+        "  if is_missing_manifest_error \"${err}\"; then",
         "    rm -f \"${err}\"",
         "    printf '\\n'",
         "    return 0",
@@ -703,6 +720,18 @@ def _push_bundle_impl(ctx):
         "  printf 'sha256:%s\\n' \"${hash}\"",
         "}",
     ])
+
+    hooks = []
+    hook_runfiles = []
+    for target in ctx.attr.publish_hooks:
+        default_info = target[DefaultInfo]
+        executable = default_info.files_to_run.executable
+        if not executable:
+            fail("before_publish hook %s must be executable" % target.label)
+        hooks.append((target, executable))
+        runfiles.append(executable)
+        if default_info.default_runfiles != None:
+            hook_runfiles.append(default_info.default_runfiles)
 
     bundle_infos = []
     image_infos = {}
@@ -779,7 +808,7 @@ def _push_bundle_impl(ctx):
         commands.append("fi")
         commands.append("")
 
-    for bundle in bundle_infos:
+    for i, bundle in enumerate(bundle_infos):
         if not bundle.artifact_suffix:
             fail("push_bundle bundle is missing artifact_suffix")
         if not bundle.bundle:
@@ -806,6 +835,30 @@ def _push_bundle_impl(ctx):
             "  fi",
             "fi",
             "if [[ \"${skip_flux_push}\" != true ]]; then",
+        ])
+        for hook_index in ctx.attr.publish_hook_order.get(str(i), []):
+            target, hook = hooks[int(hook_index)]
+            commands.extend([
+                "  (",
+                "    set -- \"$(rlocation %s)\"" % _sh_quote(hook.short_path),
+            ])
+            if RunEnvironmentInfo in target:
+                run_environment = target[RunEnvironmentInfo]
+                for key, value in run_environment.environment.items():
+                    assignment = "export -- %s || exit $?" % _sh_quote(key + "=" + value)
+                    if key in run_environment.inherited_environment:
+                        commands.append("    if ! command -p printenv -- %s >/dev/null; then %s; fi" % (_sh_quote(key), assignment))
+                    else:
+                        commands.append("    " + assignment)
+            commands.extend([
+                "    exec -- \"$1\"",
+                "  ) || {",
+                "    status=$?",
+                "    echo %s >&2" % _sh_quote("before_publish hook %s failed for %s" % (target.label, bundle.bundle_name)),
+                "    exit \"${status}\"",
+                "  }",
+            ])
+        commands.extend([
             "for tag in \"${effective_tags[@]}\"; do",
             "  flux_args=(push artifact \"${artifact}:${tag}\" --path=\"${push_bundle_path}\" --source=\"${source}\" --revision=\"${revision}\")",
             "  if [[ \"${reproducible}\" == true ]]; then flux_args+=(--reproducible); fi",
@@ -817,7 +870,7 @@ def _push_bundle_impl(ctx):
             "",
         ])
 
-    _write_executable_script(ctx, script, commands, "PushBundleScript")
+    _write_executable_script(ctx, script, script_header, "PushBundleScript", unstamped_commands = commands)
     all_runfiles = ctx.runfiles(files = runfiles)
     all_runfiles = all_runfiles.merge(ctx.attr.flux_tool[DefaultInfo].default_runfiles)
     all_runfiles = all_runfiles.merge(crane.default.default_runfiles)
@@ -826,6 +879,7 @@ def _push_bundle_impl(ctx):
         all_runfiles = all_runfiles.merge(target[DefaultInfo].default_runfiles)
     for image_runfiles_entry in image_runfiles:
         all_runfiles = all_runfiles.merge(image_runfiles_entry)
+    all_runfiles = all_runfiles.merge_all(hook_runfiles)
     return DefaultInfo(
         executable = script,
         runfiles = all_runfiles,
@@ -839,6 +893,13 @@ push_bundle = rule(
             mandatory = True,
             providers = [DeployBundleInfo],
             doc = "image_kustomization bundle targets to publish.",
+        ),
+        "publish_hooks": attr.label_list(
+            cfg = "target",
+            doc = "Executable targets supplied by publish_bundle_set for before_publish.",
+        ),
+        "publish_hook_order": attr.string_list_dict(
+            doc = "Maps bundle indices to ordered publish_hooks indices. Supplied by publish_bundle_set.",
         ),
         "push_prefix": attr.string(
             doc = "Default registry/repository prefix used for image pushes and, unless artifact_prefix is set, Flux artifacts.",
@@ -1047,15 +1108,46 @@ def _target_name(label):
         return label.rsplit(":", 1)[1]
     return label.rsplit("/", 1)[-1]
 
-def publish_bundle_set(name, bundles, all_name = None, visibility = None, **kwargs):
+def _with_publish_hooks(kwargs, bundles, hooks_by_bundle):
+    if not hooks_by_bundle:
+        return kwargs
+
+    hook_indices = {}
+    hook_order = {}
+    for i, bundle in enumerate(bundles):
+        indices = []
+        for hook in hooks_by_bundle.get(native.package_relative_label(bundle), []):
+            if hook not in hook_indices:
+                hook_indices[hook] = len(hook_indices)
+            indices.append(str(hook_indices[hook]))
+        if indices:
+            hook_order[str(i)] = indices
+    return dict(kwargs, publish_hooks = hook_indices.keys(), publish_hook_order = hook_order)
+
+def publish_bundle_set(name, bundles, all_name = None, visibility = None, before_publish = None, **kwargs):
     """Creates one push_bundle target per bundle plus an all target.
 
     For `name = "publish"` and bundle `:app_deploy`, this creates
     `:publish_app_deploy`. It also creates `:publish_all` unless `all_name` is
     supplied.
+
+    `before_publish` maps bundle labels to ordered lists of executable targets
+    to run before pushing those bundles.
     """
     if "tag" in kwargs and "push_tags" in kwargs:
         fail("publish_bundle_set %s: specify only one of tag or push_tags" % name)
+
+    hooks_by_bundle = {}
+    if before_publish:
+        bundle_labels = {native.package_relative_label(bundle): True for bundle in bundles}
+        for bundle, hooks in before_publish.items():
+            label = native.package_relative_label(bundle)
+            if label not in bundle_labels:
+                fail("publish_bundle_set %s: before_publish bundle %s is not in bundles" % (name, bundle))
+            if label in hooks_by_bundle:
+                fail("publish_bundle_set %s: duplicate before_publish bundle %s" % (name, label))
+            hooks_by_bundle[label] = [native.package_relative_label(hook) for hook in hooks]
+
     for bundle in bundles:
         publish_manifest(
             name = name + "_" + _target_name(bundle) + "_manifest",
@@ -1072,7 +1164,7 @@ def publish_bundle_set(name, bundles, all_name = None, visibility = None, **kwar
             name = name + "_" + _target_name(bundle),
             bundles = [bundle],
             visibility = visibility,
-            **kwargs
+            **_with_publish_hooks(kwargs, [bundle], hooks_by_bundle)
         )
     publish_manifest(
         name = name + "_manifest",
@@ -1089,5 +1181,5 @@ def publish_bundle_set(name, bundles, all_name = None, visibility = None, **kwar
         name = all_name or (name + "_all"),
         bundles = bundles,
         visibility = visibility,
-        **kwargs
+        **_with_publish_hooks(kwargs, bundles, hooks_by_bundle)
     )

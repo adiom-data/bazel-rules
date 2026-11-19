@@ -372,6 +372,9 @@ publish_bundle_set(
         ":db_deploy",
         ":nats_deploy",
     ],
+    before_publish = {
+        ":app_deploy": [":publish_frontend_assets"],
+    },
     push_prefix = "ghcr.io/adiom-data",
     bundle_pull_secret = "ghcr-pull",
     namespace_id = "prod",
@@ -394,6 +397,14 @@ This creates:
 :publish_nats_deploy_manifest
 :publish_manifest
 ```
+
+`before_publish` is optional. It maps entries in `bundles` to executable Bazel
+targets. Both the individual and all publish targets run each bundle's hooks
+in list order, after image pushes and before the first Flux artifact tag is
+pushed. Hooks run once per bundle regardless of the number of tags. They run
+with their runfiles and Bazel-configured environment and receive no command-line
+arguments. A hook failure stops the publish command. With `skip_existing`,
+skipping a bundle's artifact push also skips its hooks.
 
 The manifest targets produce JSON describing the Flux bundle locations and
 orchestration metadata. Bundle refs are untagged unless `manifest_tag` is set:

@@ -19,6 +19,10 @@ def _fake_push_with_runfile_impl(ctx):
         "  echo \"missing nested push runfile: ${data_path}\" >&2",
         "  exit 1",
         "fi",
+        "if [[ $# -gt 0 && \"${TEST_IMAGE_PUSH_FAIL:-}\" == 1 ]]; then",
+        "  echo 'fake image push rejected' >&2",
+        "  exit 19",
+        "fi",
         "if [[ %s == true ]]; then" % ("true" if ctx.attr.fail_once_with_manifest_unknown else "false"),
         "  state=\"${TMPDIR:-/tmp}/rules_flux_deploy_fake_push_${PPID}_%s\"" % ctx.label.name,
         "  if [[ ! -e \"${state}\" ]]; then",
@@ -45,4 +49,33 @@ fake_push_with_runfile = rule(
         ),
         "fail_once_with_manifest_unknown": attr.bool(),
     },
+)
+
+def _fake_frontend_publish_impl(ctx):
+    script = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(
+        script,
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ "${hook_tool}" == "/nonexistent/overridden-hook" ]]
+echo "frontend-assets ${TEST_HOOK_DESTINATION} ${TEST_HOOK_CHANNEL}"
+exit "${TEST_HOOK_EXIT:-0}"
+""",
+        is_executable = True,
+    )
+    return [
+        DefaultInfo(executable = script),
+        RunEnvironmentInfo(
+            environment = {
+                "TEST_HOOK_DESTINATION": "preview {BUILD_USER} assets",
+                "TEST_HOOK_CHANNEL": "default",
+                "hook_tool": "/nonexistent/overridden-hook",
+            },
+            inherited_environment = ["TEST_HOOK_CHANNEL"],
+        ),
+    ]
+
+fake_frontend_publish = rule(
+    implementation = _fake_frontend_publish_impl,
+    executable = True,
 )
